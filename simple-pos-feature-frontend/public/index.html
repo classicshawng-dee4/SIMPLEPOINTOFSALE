@@ -8,6 +8,28 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="app.css">
+    <style>
+        .spinner {
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-top: 3px solid #00564d;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-screen, .error-screen {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 16px; text-align: center; padding: 20px;
+        }
+        .auth-toggle {
+            text-align: center; margin-top: 20px; font-size: 0.9rem; color: #666;
+        }
+        .auth-toggle button {
+            background: none; border: none; color: #00564d; font-weight: 600; cursor: pointer; padding: 0 5px; font-family: inherit; font-size: inherit;
+        }
+        .auth-toggle button:hover { text-decoration: underline; }
+    </style>
 </head>
 <body>
     <div id="react-root"></div>
@@ -16,40 +38,176 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script type="text/babel">
 (() => {
-const { useEffect, useState } = React;
+const { useEffect, useState, createContext, useContext } = React;
 const { createRoot } = ReactDOM;
+
 const API_BASE = 'http://localhost:5000';
 const money = value => `$${Number(value || 0).toFixed(2)}`;
 
 async function api(path, options = {}) {
-    const response = await fetch(`${API_BASE}${path}`, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.success === false) throw new Error(result.message || 'Request failed.');
-    return result;
+    try {
+        const response = await fetch(`${API_BASE}${path}`, { 
+            headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, 
+            ...options 
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.success === false) throw new Error(result.message || `Server error: ${response.status}`);
+        return result;
+    } catch (error) {
+        if (error.message === 'Failed to fetch') {
+            throw new Error('Cannot connect to the server. Is the backend running?');
+        }
+        throw error;
+    }
+}
+
+const PosContext = createContext();
+const usePosContext = () => useContext(PosContext);
+
+function PosProvider({ children }) {
+    const [user, setUser] = useState(null);
+    const [cart, setCart] = useState([]);
+
+    const login = (userData) => setUser(userData);
+    const logout = () => { setUser(null); setCart([]); };
+
+    const addToCart = (product, notify) => {
+        if (product.stock < 1) return notify('This product is out of stock.');
+        setCart(current => {
+            const found = current.find(item => item.id === product._id);
+            if (found && found.quantity >= product.stock) {
+                notify(`Only ${product.stock} available.`);
+                return current;
+            }
+            return found 
+                ? current.map(item => item.id === product._id ? { ...item, quantity: item.quantity + 1 } : item) 
+                : [...current, { id: product._id, name: product.name, price: Number(product.price), quantity: 1, originalProduct: product }];
+        });
+    };
+
+    const removeFromCart = (productId) => {
+        setCart(current => {
+            const found = current.find(item => item.id === productId);
+            if (!found) return current;
+            if (found.quantity === 1) return current.filter(item => item.id !== productId);
+            return current.map(item => item.id === productId ? { ...item, quantity: item.quantity - 1 } : item);
+        });
+    };
+
+    const clearCart = () => setCart([]);
+
+    return (
+        <PosContext.Provider value={{ user, login, logout, cart, addToCart, removeFromCart, clearCart }}>
+            {children}
+        </PosContext.Provider>
+    );
 }
 
 function Brand() { return <div className="login-brand"><span className="login-mark">S</span><span>SIMPLE POS</span></div>; }
 
-function Login({ onLogin }) {
-    const [role, setRole] = useState('cashier');
+function Auth() {
+    const { login } = usePosContext(); 
+    const [isLoginView, setIsLoginView] = useState(true);
+    
+    const [name, setName] = useState('');
     const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [role, setRole] = useState('Cashier');
+    
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [successMsg, setSuccessMsg] = useState('');
+    
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        setError('');
+        setSuccessMsg('');
+        
+        try {
+            if (isLoginView) {
+                const response = await api('/api/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ email, password })
+                });
+                if (response.data) login(response.data);
+            } else {
+                const response = await api('/api/auth/register', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, email, password, role })
+                });
+                if (response.success || response.data) {
+                    setSuccessMsg('Account created successfully! Logging you in...');
+                    setTimeout(() => {
+                        const userData = { ...response.data, _id: response.data?.id || response.data?._id };
+                        login(userData);
+                    }, 1500);
+                }
+            }
+        } catch (err) {
+            setError(err.message || (isLoginView ? 'Invalid credentials' : 'Registration failed'));
+        } finally {
+            if (!successMsg) setBusy(false);
+        }
+    };
+
+    const toggleView = () => { setIsLoginView(!isLoginView); setError(''); setSuccessMsg(''); };
+    
     return <main className="login-page">
         <section className="login-art"><Brand /><h1>Make every sale feel simple.</h1><p>A focused point-of-sale workspace for the people managing stock and the people serving customers.</p></section>
-        <section className="login-panel"><form className="login-form" onSubmit={event => { event.preventDefault(); onLogin({ email, role }); }}>
-            <span className="eyebrow">Workspace access</span><h2>Welcome back.</h2><p className="muted">Sign in to continue to your POS workspace.</p>
-            <div className="field"><label htmlFor="email">Work email</label><input id="email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Enter your email" required /></div>
-            <div className="field"><label htmlFor="role">Open workspace as</label><select id="role" value={role} onChange={event => setRole(event.target.value)}><option value="cashier">Cashier</option><option value="admin">Administrator</option></select></div>
-            <button className="primary-btn full-width" type="submit">Enter workspace</button>
+        <section className="login-panel"><form className="login-form" onSubmit={handleSubmit}>
+            <span className="eyebrow">Workspace access</span>
+            <h2>{isLoginView ? 'Welcome back.' : 'Create an account.'}</h2>
+            <p className="muted">{isLoginView ? 'Sign in to continue to your POS workspace.' : 'Sign up to set up a new workspace member.'}</p>
+            
+            {error && <div className="alert" style={{color: 'red', backgroundColor: '#ffe5e5', padding: '10px', borderRadius: '4px', marginBottom: '10px', fontSize: '0.9rem'}}>{error}</div>}
+            {successMsg && <div className="alert" style={{color: '#00564d', backgroundColor: '#e5f5f3', padding: '10px', borderRadius: '4px', marginBottom: '10px', fontSize: '0.9rem'}}>{successMsg}</div>}
+            
+            {!isLoginView && (
+                <div className="field">
+                    <label htmlFor="name">Full Name</label>
+                    <input id="name" type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Enter your full name" required={!isLoginView} disabled={busy}/>
+                </div>
+            )}
+            
+            <div className="field"><label htmlFor="email">Work email</label><input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Enter your email" required disabled={busy}/></div>
+            <div className="field"><label htmlFor="password">Password</label><input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" minLength="6" required disabled={busy}/></div>
+
+            {!isLoginView && (
+                <div className="field">
+                    <label htmlFor="role">Account Role</label>
+                    <select id="role" value={role} onChange={e => setRole(e.target.value)} disabled={busy}>
+                        <option value="Cashier">Cashier</option>
+                        <option value="Admin">Administrator</option>
+                    </select>
+                </div>
+            )}
+            
+            <button className="primary-btn full-width" type="submit" disabled={busy}>
+                {busy ? <span style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}><div className="spinner" style={{width: '16px', height: '16px', borderTopColor: '#fff'}}></div> Processing...</span> : (isLoginView ? 'Enter workspace' : 'Create Account')}
+            </button>
+
+            <div className="auth-toggle">
+                {isLoginView ? (
+                    <p>Don't have an account? <button type="button" onClick={toggleView} disabled={busy}>Sign up</button></p>
+                ) : (
+                    <p>Already have an account? <button type="button" onClick={toggleView} disabled={busy}>Sign in</button></p>
+                )}
+            </div>
         </form></section>
     </main>;
 }
 
-function Shell({ user, view, setView, children, onLogout }) {
-    const navItems = user.role === 'admin' ? [['dashboard', 'Overview'], ['inventory', 'Inventory']] : [['checkout', 'Checkout']];
-    return <div className="shell"><aside className="sidebar"><Brand /><nav className="nav">{navItems.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</nav><div className="sidebar-footer"><strong>{user.email}</strong><span>{user.role === 'admin' ? 'Administrator' : 'Cashier'}</span><button className="logout" onClick={onLogout}>Sign out</button></div></aside><main className="content">{children}</main></div>;
+function Shell({ view, setView, children }) {
+    const { user, logout } = usePosContext(); 
+    const navItems = (user.role === 'admin' || user.role === 'Admin') ? [['dashboard', 'Overview'], ['inventory', 'Inventory']] : [['checkout', 'Checkout']];
+    return <div className="shell"><aside className="sidebar"><Brand /><nav className="nav">{navItems.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</nav><div className="sidebar-footer"><strong>{user.name || user.email}</strong><span>{(user.role === 'admin' || user.role === 'Admin') ? 'Administrator' : 'Cashier'}</span><button className="logout" onClick={logout}>Sign out</button></div></aside><main className="content">{children}</main></div>;
 }
 
-function Header({ eyebrow, title, user }) { return <header className="content-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div><div className="user-chip"><span>{user.role === 'admin' ? 'Admin workspace' : 'Sales floor'}</span><span className="avatar">{user.email.charAt(0).toUpperCase()}</span></div></header>; }
+function Header({ eyebrow, title }) { 
+    const { user } = usePosContext(); 
+    return <header className="content-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div><div className="user-chip"><span>{(user.role === 'admin' || user.role === 'Admin') ? 'Admin workspace' : 'Sales floor'}</span><span className="avatar">{(user.name || user.email).charAt(0).toUpperCase()}</span></div></header>; 
+}
 
 function ProductModal({ product, onClose, onSave }) {
     const [form, setForm] = useState(product || { name: '', category: '', price: '', costPrice: '', stock: '', barcode: '', description: '' });
@@ -57,34 +215,171 @@ function ProductModal({ product, onClose, onSave }) {
     return <div className="modal-backdrop"><form className="modal" onSubmit={event => { event.preventDefault(); onSave(form); }}><h2>{product ? 'Edit product' : 'Add product'}</h2><p className="muted">Keep the catalog accurate for the sales floor.</p><div className="field"><label>Product name</label><input value={form.name} onChange={update('name')} required /></div><div className="field"><label>Category</label><input value={form.category} onChange={update('category')} required /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}><div className="field"><label>Selling price</label><input type="number" min="0" step="0.01" value={form.price} onChange={update('price')} required /></div><div className="field"><label>Stock quantity</label><input type="number" min="0" step="1" value={form.stock} onChange={update('stock')} required /></div></div><div className="field"><label>Barcode</label><input value={form.barcode} onChange={update('barcode')} /></div><div className="modal-actions"><button className="secondary-btn" type="button" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit">Save product</button></div></form></div>;
 }
 
-function Inventory({ products, reload, notify, user }) {
+function Inventory({ products, reload, notify }) {
     const [query, setQuery] = useState('');
     const [editing, setEditing] = useState(null);
     const [saving, setSaving] = useState(false);
     const visibleProducts = products.filter(product => `${product.name} ${product.category} ${product.barcode}`.toLowerCase().includes(query.toLowerCase()));
+    
     const saveProduct = async form => { setSaving(true); try { const body = { ...form, price: Number(form.price), stock: Number(form.stock), costPrice: Number(form.costPrice || 0) }; if (editing?._id) await api(`/api/products/${editing._id}`, { method: 'PUT', body: JSON.stringify(body) }); else await api('/api/products', { method: 'POST', body: JSON.stringify(body) }); setEditing(null); await reload(); notify(editing ? 'Product updated.' : 'Product added.'); } catch (error) { notify(error.message); } finally { setSaving(false); } };
     const removeProduct = async product => { if (!window.confirm(`Delete ${product.name}?`)) return; try { await api(`/api/products/${product._id}`, { method: 'DELETE' }); await reload(); notify('Product deleted.'); } catch (error) { notify(error.message); } };
-    return <><Header eyebrow="Admin workspace" title="Inventory" user={user} /><div className="toolbar-row"><input className="search-box" placeholder="Search name, category, barcode" value={query} onChange={event => setQuery(event.target.value)} /><button className="primary-btn" onClick={() => setEditing({})}>+ Add product</button></div><section className="panel"><div className="panel-heading"><h2>Catalog</h2><span className="muted">{visibleProducts.length} products</span></div><div className="table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead><tbody>{visibleProducts.map(product => <tr key={product._id}><td><span className="product-name">{product.name}</span><br /><small className="muted">{product.barcode || 'No barcode'}</small></td><td>{product.category}</td><td>{money(product.price)}</td><td className={product.stock < 5 ? 'stock-low' : 'stock-ok'}>{product.stock}</td><td><div className="table-actions"><button className="icon-btn" title="Edit product" onClick={() => setEditing(product)}>Edit</button><button className="icon-btn delete" title="Delete product" onClick={() => removeProduct(product)}>Del</button></div></td></tr>)}</tbody></table>{!visibleProducts.length && <div className="empty">No products match this search.</div>}</div></section>{editing && <ProductModal product={editing._id ? editing : null} onClose={() => setEditing(null)} onSave={saving ? () => {} : saveProduct} />}</>;
+    
+    return <><Header eyebrow="Admin workspace" title="Inventory" /><div className="toolbar-row"><input className="search-box" placeholder="Search name, category, barcode" value={query} onChange={event => setQuery(event.target.value)} /><button className="primary-btn" onClick={() => setEditing({})}>+ Add product</button></div><section className="panel"><div className="panel-heading"><h2>Catalog</h2><span className="muted">{visibleProducts.length} products</span></div><div className="table-wrap"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead><tbody>{visibleProducts.map(product => <tr key={product._id}><td><span className="product-name">{product.name}</span><br /><small className="muted">{product.barcode || 'No barcode'}</small></td><td>{product.category}</td><td>{money(product.price)}</td><td className={product.stock < 5 ? 'stock-low' : 'stock-ok'}>{product.stock}</td><td><div className="table-actions"><button className="icon-btn" title="Edit product" onClick={() => setEditing(product)} disabled={saving}>Edit</button><button className="icon-btn delete" title="Delete product" onClick={() => removeProduct(product)} disabled={saving}>Del</button></div></td></tr>)}</tbody></table>{!visibleProducts.length && <div className="empty">No products match this search.</div>}</div></section>{editing && <ProductModal product={editing._id ? editing : null} onClose={() => setEditing(null)} onSave={saving ? () => {} : saveProduct} />}</>;
 }
 
-function Dashboard({ products, user }) { const lowStock = products.filter(product => product.stock < 5).length; return <><Header eyebrow="Admin workspace" title="Good morning." user={user} /><div className="stat-grid"><div className="stat"><span className="stat-label">Catalog items</span><strong>{products.length}</strong></div><div className="stat"><span className="stat-label">Low stock alerts</span><strong>{lowStock}</strong></div><div className="stat"><span className="stat-label">Inventory value</span><strong>{money(products.reduce((total, product) => total + product.price * product.stock, 0))}</strong></div></div><section className="panel"><div className="panel-heading"><h2>Stock attention</h2><span className="muted">Review before opening</span></div>{products.filter(product => product.stock < 5).map(product => <div className="cart-line" style={{ margin: '0 20px' }} key={product._id}><div><strong>{product.name}</strong><div className="quantity">{product.category}</div></div><span className="stock-low">{product.stock} left</span></div>)}{!lowStock && <div className="empty">Everything is well stocked.</div>}</section></>; }
-
-function Checkout({ products, reload, notify, user }) {
-    const [query, setQuery] = useState(''); const [cart, setCart] = useState([]); const [payment, setPayment] = useState('cash'); const [amount, setAmount] = useState(''); const [busy, setBusy] = useState(false);
-    const filtered = products.filter(product => `${product.name} ${product.category}`.toLowerCase().includes(query.toLowerCase())); const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const add = product => { if (product.stock < 1) return notify('This product is out of stock.'); setCart(current => { const found = current.find(item => item.id === product._id); if (found && found.quantity >= product.stock) { notify(`Only ${product.stock} available.`); return current; } return found ? current.map(item => item.id === product._id ? { ...item, quantity: item.quantity + 1 } : item) : [...current, { id: product._id, name: product.name, price: Number(product.price), quantity: 1 }]; }); };
-    const completeSale = async event => { event.preventDefault(); if (!cart.length) return notify('Add a product first.'); if (Number(amount) < total) return notify('Amount received is less than the total.'); setBusy(true); try { const result = await api('/api/sales', { method: 'POST', body: JSON.stringify({ items: cart.map(item => ({ productId: item.id, quantity: item.quantity })), paymentMethod: payment, amountPaid: Number(amount), cashierName: user.email }) }); setCart([]); setAmount(''); await reload(); notify(`Sale complete: ${result.data.receiptNumber}`); } catch (error) { notify(error.message); } finally { setBusy(false); } };
-    return <><Header eyebrow="Cashier workspace" title="Start a sale." user={user} /><div className="checkout-layout"><section><div className="toolbar-row"><input className="search-box" placeholder="Search products to add" value={query} onChange={event => setQuery(event.target.value)} /><span className="muted">{filtered.length} available</span></div><div className="cashier-products">{filtered.map(product => <button className="product-tile" key={product._id} onClick={() => add(product)} disabled={product.stock < 1}><small>{product.category} · {product.stock} in stock</small><strong>{product.name}</strong><span className="tile-price">{money(product.price)}</span></button>)}</div>{!filtered.length && <div className="empty">No products found.</div>}</section><form className="panel cart-panel" onSubmit={completeSale}><h2>Current sale</h2>{cart.map(item => <div className="cart-line" key={item.id}><div><strong>{item.name}</strong><div className="quantity">{item.quantity} × {money(item.price)}</div></div><strong>{money(item.price * item.quantity)}</strong></div>)}{!cart.length && <div className="empty">Your basket is empty.</div>}<div className="cart-total"><span>Total</span><span>{money(total)}</span></div><div className="field"><label>Payment method</label><select value={payment} onChange={event => setPayment(event.target.value)}><option value="cash">Cash</option><option value="card">Card</option><option value="transfer">Bank transfer</option><option value="mobile_money">Mobile money</option></select></div><div className="field"><label>Amount received</label><input type="number" min={total} step="0.01" value={amount} onChange={event => setAmount(event.target.value)} placeholder={total.toFixed(2)} /></div><button className="primary-btn full-width" disabled={busy || !cart.length}>{busy ? 'Processing...' : 'Complete sale'}</button></form></div></>;
+function Dashboard({ products }) { 
+    const lowStock = products.filter(product => product.stock < 5).length; 
+    return <><Header eyebrow="Admin workspace" title="Good morning." /><div className="stat-grid"><div className="stat"><span className="stat-label">Catalog items</span><strong>{products.length}</strong></div><div className="stat"><span className="stat-label">Low stock alerts</span><strong>{lowStock}</strong></div><div className="stat"><span className="stat-label">Inventory value</span><strong>{money(products.reduce((total, product) => total + product.price * product.stock, 0))}</strong></div></div><section className="panel"><div className="panel-heading"><h2>Stock attention</h2><span className="muted">Review before opening</span></div>{products.filter(product => product.stock < 5).map(product => <div className="cart-line" style={{ margin: '0 20px' }} key={product._id}><div><strong>{product.name}</strong><div className="quantity">{product.category}</div></div><span className="stock-low">{product.stock} left</span></div>)}{!lowStock && <div className="empty">Everything is well stocked.</div>}</section></>; 
 }
 
-function App() {
-    const [user, setUser] = useState(null); const [view, setView] = useState('checkout'); const [products, setProducts] = useState([]); const [error, setError] = useState(''); const [toast, setToast] = useState('');
-    const notify = message => { setToast(message); window.setTimeout(() => setToast(''), 3500); };
-    const reload = async () => { try { const result = await api('/api/products'); setProducts(result.data || []); setError(''); } catch (requestError) { setError(requestError.message); } };
-    useEffect(() => { if (user) reload(); }, [user]);
-    if (!user) return <Login onLogin={loggedInUser => { setUser(loggedInUser); setView(loggedInUser.role === 'admin' ? 'dashboard' : 'checkout'); }} />;
-    return <div className="pos-root"><Shell user={user} view={view} setView={setView} onLogout={() => setUser(null)}>{error && <div className="alert">Could not load the catalog: {error}</div>}{view === 'dashboard' && <Dashboard products={products} user={user} />}{view === 'inventory' && <Inventory products={products} reload={reload} notify={notify} user={user} />}{view === 'checkout' && <Checkout products={products} reload={reload} notify={notify} user={user} />}</Shell>{toast && <div className="toast">{toast}</div>}</div>;
+function Checkout({ products, reload, notify }) {
+    const { user, cart, addToCart, removeFromCart, clearCart } = usePosContext();
+    const [query, setQuery] = useState(''); 
+    
+    // STRICTLY Capitalized default values to match the backend enum requirements
+    const [payment, setPayment] = useState('Cash'); 
+    
+    const [amount, setAmount] = useState(''); 
+    const [busy, setBusy] = useState(false);
+    
+    const filtered = products.filter(product => `${product.name} ${product.category}`.toLowerCase().includes(query.toLowerCase())); 
+    const subtotal = Number(cart.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2));
+    
+    // Auto-update amount received field to match cart subtotal
+    useEffect(() => {
+        if (subtotal > 0) {
+            setAmount(subtotal.toFixed(2));
+        } else {
+            setAmount('');
+        }
+    }, [subtotal]);
+
+    const completeSale = async event => { 
+        event.preventDefault(); 
+        if (!cart.length) return notify('Add a product first.'); 
+        
+        const amountReceived = amount === '' ? subtotal : Number(amount);
+        if (amountReceived < subtotal) return notify('Amount received is less than the total.'); 
+        
+        setBusy(true); 
+        try { 
+            const formattedItems = cart.map(item => ({
+                product: item.id,
+                name: item.name,
+                quantity: item.quantity,
+                unitPrice: item.price,
+                subtotal: Number((item.price * item.quantity).toFixed(2))
+            }));
+
+            // GUARANTEED UNIQUE: Time in exact milliseconds + random digits
+            const uniqueCode = `REC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+            const payload = { 
+                saleNumber: uniqueCode,
+                receiptNumber: uniqueCode, // Sending both to be safe
+                customerName: "Walk-in Customer",
+                items: formattedItems,
+                
+                // Sending totals
+                subtotal: subtotal,
+                total: subtotal,
+                totalAmount: subtotal,
+                
+                // EXACT Capitalized Enums
+                paymentMethod: payment, 
+                status: 'Completed', 
+                
+                amountPaid: amountReceived,
+                changeDue: Number((amountReceived - subtotal).toFixed(2)),
+                soldBy: user._id || null,
+                cashierId: user._id || null,
+                cashierName: user.name || user.email || 'cashier'
+            };
+            
+            const result = await api('/api/sales', { method: 'POST', body: JSON.stringify(payload) }); 
+            
+            clearCart(); 
+            setAmount(''); 
+            await reload(); 
+            notify(`Sale complete! Receipt: ${result.data?.saleNumber || result.data?.receiptNumber || uniqueCode}`); 
+        } catch (error) { 
+            console.error("Checkout caught an error:", error);
+            notify(`Checkout error: ${error.message}`); 
+        } finally { 
+            setBusy(false); 
+        } 
+    };
+    
+    return <><Header eyebrow="Cashier workspace" title="Start a sale." /><div className="checkout-layout"><section><div className="toolbar-row"><input className="search-box" placeholder="Search products to add" value={query} onChange={event => setQuery(event.target.value)} disabled={busy} /><span className="muted">{filtered.length} available</span></div><div className="cashier-products">{filtered.map(product => <button className="product-tile" key={product._id} onClick={() => addToCart(product, notify)} disabled={product.stock < 1 || busy}><small>{product.category} · {product.stock} in stock</small><strong>{product.name}</strong><span className="tile-price">{money(product.price)}</span></button>)}</div>{!filtered.length && <div className="empty">No products found.</div>}</section><form className="panel cart-panel" onSubmit={completeSale}><h2>Current sale</h2>{cart.map(item => <div className="cart-line" key={item.id}><div><strong>{item.name}</strong><div className="quantity" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}><button type="button" onClick={() => removeFromCart(item.id)} style={{ padding: '0 6px', border: '1px solid #ccc', borderRadius: '4px', background: 'transparent', cursor: 'pointer' }} disabled={busy}>-</button>{item.quantity} × {money(item.price)}</div></div><strong>{money(item.price * item.quantity)}</strong></div>)}{!cart.length && <div className="empty">Your basket is empty.</div>}<div className="cart-total"><span>Total</span><span>{money(subtotal)}</span></div><div className="field"><label>Payment method</label><select value={payment} onChange={event => setPayment(event.target.value)} disabled={busy}>
+        {/* VALUES MUST MATCH SCHEMA STRICTLY */}
+        <option value="Cash">Cash</option>
+        <option value="Card">Card</option>
+        <option value="Transfer">Bank transfer</option>
+        <option value="Mobile_money">Mobile money</option>
+    </select></div><div className="field"><label>Amount received</label><input type="number" min={subtotal} step="0.01" value={amount} onChange={event => setAmount(event.target.value)} placeholder={subtotal > 0 ? subtotal.toFixed(2) : "Enter amount"} disabled={busy} /></div><button className="primary-btn full-width" disabled={busy || !cart.length}>{busy ? <span style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}><div className="spinner" style={{width: '16px', height: '16px', borderTopColor: '#fff'}}></div> Processing...</span> : 'Complete sale'}</button></form></div></>;
 }
+
+function MainApp() {
+    const { user } = usePosContext(); 
+    const [view, setView] = useState('checkout'); 
+    const [products, setProducts] = useState([]); 
+    const [error, setError] = useState(''); 
+    const [toast, setToast] = useState('');
+    const [isLoading, setIsLoading] = useState(true); 
+    
+    const notify = message => { setToast(message); window.setTimeout(() => setToast(''), 4500); };
+    
+    const reload = async () => { 
+        try { 
+            const result = await api('/api/products'); 
+            setProducts(result.data || []); 
+            setError(''); 
+        } catch (requestError) { 
+            setError(requestError.message); 
+        } finally {
+            setIsLoading(false); 
+        } 
+    };
+    
+    useEffect(() => { 
+        if (user) {
+            setView((user.role === 'admin' || user.role === 'Admin') ? 'dashboard' : 'checkout');
+            setIsLoading(true); 
+            reload(); 
+        }
+    }, [user]);
+    
+    if (!user) return <Auth />;
+    
+    if (isLoading) {
+        return <div className="pos-root"><Shell view={view} setView={setView}>
+            <div className="loading-screen">
+                <div className="spinner"></div>
+                <h2>Loading workspace...</h2>
+                <p className="muted">Fetching real-time inventory</p>
+            </div>
+        </Shell></div>;
+    }
+
+    if (error && products.length === 0) {
+        return <div className="pos-root"><Shell view={view} setView={setView}>
+            <div className="error-screen">
+                <h2 style={{color: '#d93025'}}>Connection Failed</h2>
+                <p>{error}</p>
+                <button className="primary-btn" onClick={() => { setIsLoading(true); setError(''); reload(); }}>Try Again</button>
+            </div>
+        </Shell></div>;
+    }
+    
+    return <div className="pos-root"><Shell view={view} setView={setView}>
+        {error && <div className="alert" style={{color: 'red', backgroundColor: '#ffe5e5', padding: '10px', borderRadius: '4px', marginBottom: '20px', border: '1px solid red'}}>Warning: Catalog is outdated. {error}</div>}
+        {view === 'dashboard' && <Dashboard products={products} />}
+        {view === 'inventory' && <Inventory products={products} reload={reload} notify={notify} />}
+        {view === 'checkout' && <Checkout products={products} reload={reload} notify={notify} />}
+    </Shell>{toast && <div className="toast">{toast}</div>}</div>;
+}
+
+function App() { return <PosProvider><MainApp /></PosProvider>; }
 
 createRoot(document.getElementById('react-root')).render(<App />);
 })();
