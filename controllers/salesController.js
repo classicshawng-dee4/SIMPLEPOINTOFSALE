@@ -76,7 +76,7 @@ const restoreStockForSale = async (items) => {
   }
 };
 
-// GET all sales
+// GET all sales (Includes Search & Pagination for Capstone Req 12)
 export const getSales = async (req, res) => {
   try {
     const { search, status } = req.query;
@@ -103,11 +103,14 @@ export const getSales = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(limit);
 
+    // Adjusted to strictly match Capstone Req 11: { success, message, data }
     return res.status(200).json({
       success: true,
       message: "Sales retrieved successfully",
-      data: sales,
-      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      data: {
+        sales,
+        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
+      }
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: "Unable to retrieve sales", data: null });
@@ -250,5 +253,43 @@ export const deleteSale = async (req, res) => {
     return res.status(200).json({ success: true, message: "Sale deleted successfully", data: deletedSale });
   } catch (error) {
     return res.status(500).json({ success: false, message: "Unable to delete sale", data: null });
+  }
+};
+
+// UPDATE SALE STATUS (Specific route for Admin Order Management)
+export const updateSaleStatus = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid sale ID", data: null });
+    }
+
+    const { status } = req.body;
+    
+    // Capitalize to match enum ("Completed", "Pending", "Cancelled")
+    const normalizedStatus = status ? (status.charAt(0).toUpperCase() + status.slice(1).toLowerCase()) : null;
+
+    const validStatuses = ["Completed", "Pending", "Cancelled"];
+    if (!validStatuses.includes(normalizedStatus)) {
+      return res.status(400).json({ success: false, message: "Invalid status value", data: null });
+    }
+
+    const updatedSale = await Sale.findByIdAndUpdate(
+      req.params.id,
+      { status: normalizedStatus },
+      { new: true, runValidators: true }
+    ).populate("items.product", "name sku price");
+
+    if (!updatedSale) {
+      return res.status(404).json({ success: false, message: "Sale not found", data: null });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: `Sale status successfully updated to ${normalizedStatus}`, 
+      data: updatedSale 
+    });
+  } catch (error) {
+    console.error("Update Status Error: ", error);
+    return res.status(500).json({ success: false, message: "Unable to update sale status", data: null });
   }
 };

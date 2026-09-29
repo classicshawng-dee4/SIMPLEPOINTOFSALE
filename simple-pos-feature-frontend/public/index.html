@@ -44,13 +44,29 @@ const { createRoot } = ReactDOM;
 const API_BASE = 'http://localhost:5000';
 const money = value => `$${Number(value || 0).toFixed(2)}`;
 
+// API helper with JWT Token integration
 async function api(path, options = {}) {
     try {
+        const token = localStorage.getItem('token'); 
+        
+        const headers = { 
+            'Content-Type': 'application/json', 
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            ...(options.headers || {}) 
+        };
+
         const response = await fetch(`${API_BASE}${path}`, { 
-            headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, 
+            headers, 
             ...options 
         });
+        
         const result = await response.json().catch(() => ({}));
+        
+        if (response.status === 401) {
+            localStorage.removeItem('token');
+            throw new Error('Session expired. Please log in again.');
+        }
+
         if (!response.ok || result.success === false) throw new Error(result.message || `Server error: ${response.status}`);
         return result;
     } catch (error) {
@@ -69,7 +85,13 @@ function PosProvider({ children }) {
     const [cart, setCart] = useState([]);
 
     const login = (userData) => setUser(userData);
-    const logout = () => { setUser(null); setCart([]); };
+    
+    // Clear the token on logout
+    const logout = () => { 
+        localStorage.removeItem('token'); 
+        setUser(null); 
+        setCart([]); 
+    };
 
     const addToCart = (product, notify) => {
         if (product.stock < 1) return notify('This product is out of stock.');
@@ -130,7 +152,10 @@ function Auth() {
                     method: 'POST',
                     body: JSON.stringify({ email, password })
                 });
-                if (response.data) login(response.data);
+                if (response.data) {
+                    if (response.data.token) localStorage.setItem('token', response.data.token);
+                    login(response.data);
+                }
             } else {
                 const response = await api('/api/auth/register', {
                     method: 'POST',
@@ -139,6 +164,7 @@ function Auth() {
                 if (response.success || response.data) {
                     setSuccessMsg('Account created successfully! Logging you in...');
                     setTimeout(() => {
+                        if (response.data?.token) localStorage.setItem('token', response.data.token);
                         const userData = { ...response.data, _id: response.data?.id || response.data?._id };
                         login(userData);
                     }, 1500);
@@ -200,7 +226,12 @@ function Auth() {
 
 function Shell({ view, setView, children }) {
     const { user, logout } = usePosContext(); 
-    const navItems = (user.role === 'admin' || user.role === 'Admin') ? [['dashboard', 'Overview'], ['inventory', 'Inventory']] : [['checkout', 'Checkout']];
+    
+    // UPDATED: Sales History added for both Admin and Cashier roles
+    const navItems = (user.role === 'admin' || user.role === 'Admin') 
+        ? [['dashboard', 'Overview'], ['inventory', 'Inventory'], ['history', 'Sales History']] 
+        : [['checkout', 'Checkout'], ['history', 'Sales History']];
+        
     return <div className="shell"><aside className="sidebar"><Brand /><nav className="nav">{navItems.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}</nav><div className="sidebar-footer"><strong>{user.name || user.email}</strong><span>{(user.role === 'admin' || user.role === 'Admin') ? 'Administrator' : 'Cashier'}</span><button className="logout" onClick={logout}>Sign out</button></div></aside><main className="content">{children}</main></div>;
 }
 
@@ -235,17 +266,13 @@ function Dashboard({ products }) {
 function Checkout({ products, reload, notify }) {
     const { user, cart, addToCart, removeFromCart, clearCart } = usePosContext();
     const [query, setQuery] = useState(''); 
-    
-    // STRICTLY Capitalized default values to match the backend enum requirements
     const [payment, setPayment] = useState('Cash'); 
-    
     const [amount, setAmount] = useState(''); 
     const [busy, setBusy] = useState(false);
     
     const filtered = products.filter(product => `${product.name} ${product.category}`.toLowerCase().includes(query.toLowerCase())); 
     const subtotal = Number(cart.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2));
     
-    // Auto-update amount received field to match cart subtotal
     useEffect(() => {
         if (subtotal > 0) {
             setAmount(subtotal.toFixed(2));
@@ -271,24 +298,18 @@ function Checkout({ products, reload, notify }) {
                 subtotal: Number((item.price * item.quantity).toFixed(2))
             }));
 
-            // GUARANTEED UNIQUE: Time in exact milliseconds + random digits
             const uniqueCode = `REC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
             const payload = { 
                 saleNumber: uniqueCode,
-                receiptNumber: uniqueCode, // Sending both to be safe
+                receiptNumber: uniqueCode,
                 customerName: "Walk-in Customer",
                 items: formattedItems,
-                
-                // Sending totals
                 subtotal: subtotal,
                 total: subtotal,
                 totalAmount: subtotal,
-                
-                // EXACT Capitalized Enums
                 paymentMethod: payment, 
                 status: 'Completed', 
-                
                 amountPaid: amountReceived,
                 changeDue: Number((amountReceived - subtotal).toFixed(2)),
                 soldBy: user._id || null,
@@ -311,12 +332,86 @@ function Checkout({ products, reload, notify }) {
     };
     
     return <><Header eyebrow="Cashier workspace" title="Start a sale." /><div className="checkout-layout"><section><div className="toolbar-row"><input className="search-box" placeholder="Search products to add" value={query} onChange={event => setQuery(event.target.value)} disabled={busy} /><span className="muted">{filtered.length} available</span></div><div className="cashier-products">{filtered.map(product => <button className="product-tile" key={product._id} onClick={() => addToCart(product, notify)} disabled={product.stock < 1 || busy}><small>{product.category} · {product.stock} in stock</small><strong>{product.name}</strong><span className="tile-price">{money(product.price)}</span></button>)}</div>{!filtered.length && <div className="empty">No products found.</div>}</section><form className="panel cart-panel" onSubmit={completeSale}><h2>Current sale</h2>{cart.map(item => <div className="cart-line" key={item.id}><div><strong>{item.name}</strong><div className="quantity" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}><button type="button" onClick={() => removeFromCart(item.id)} style={{ padding: '0 6px', border: '1px solid #ccc', borderRadius: '4px', background: 'transparent', cursor: 'pointer' }} disabled={busy}>-</button>{item.quantity} × {money(item.price)}</div></div><strong>{money(item.price * item.quantity)}</strong></div>)}{!cart.length && <div className="empty">Your basket is empty.</div>}<div className="cart-total"><span>Total</span><span>{money(subtotal)}</span></div><div className="field"><label>Payment method</label><select value={payment} onChange={event => setPayment(event.target.value)} disabled={busy}>
-        {/* VALUES MUST MATCH SCHEMA STRICTLY */}
         <option value="Cash">Cash</option>
         <option value="Card">Card</option>
         <option value="Transfer">Bank transfer</option>
         <option value="Mobile_money">Mobile money</option>
     </select></div><div className="field"><label>Amount received</label><input type="number" min={subtotal} step="0.01" value={amount} onChange={event => setAmount(event.target.value)} placeholder={subtotal > 0 ? subtotal.toFixed(2) : "Enter amount"} disabled={busy} /></div><button className="primary-btn full-width" disabled={busy || !cart.length}>{busy ? <span style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'}}><div className="spinner" style={{width: '16px', height: '16px', borderTopColor: '#fff'}}></div> Processing...</span> : 'Complete sale'}</button></form></div></>;
+}
+
+// NEW: Crash-Proof Sales History Component
+function SalesHistory({ notify }) {
+    const [sales, setSales] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const { useEffect } = React;
+
+    useEffect(() => {
+        const fetchSales = async () => {
+            try {
+                const result = await api('/api/sales');
+                
+                // SAFTEY CHECK: Extract the array whether the backend returns it directly, 
+                // or wraps it inside an object (e.g., result.data.sales or result.data.docs)
+                let salesData = [];
+                if (Array.isArray(result.data)) {
+                    salesData = result.data;
+                } else if (result.data && Array.isArray(result.data.sales)) {
+                    salesData = result.data.sales;
+                } else if (result.data && Array.isArray(result.data.docs)) {
+                    salesData = result.data.docs;
+                }
+                
+                setSales(salesData);
+            } catch (err) {
+                notify(err.message || 'Failed to load sales history');
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchSales();
+    }, []);
+
+    // Secondary safety check: ensure 'sales' is actually an array before rendering
+    const safeSalesArray = Array.isArray(sales) ? sales : [];
+
+    return (
+        <>
+            <Header eyebrow="Workspace" title="Sales History" />
+            <section className="panel">
+                <div className="panel-heading">
+                    <h2>Recent Transactions</h2>
+                    <span className="muted">{safeSalesArray.length} orders</span>
+                </div>
+                <div className="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Receipt No.</th>
+                                <th>Date</th>
+                                <th>Items</th>
+                                <th>Total</th>
+                                <th>Payment</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loading && <tr><td colSpan="5" style={{textAlign: 'center', padding: '20px'}}>Loading...</td></tr>}
+                            {!loading && safeSalesArray.length === 0 && <tr><td colSpan="5" className="empty" style={{textAlign: 'center', padding: '20px'}}>No sales history found.</td></tr>}
+                            {!loading && safeSalesArray.map(sale => (
+                                <tr key={sale._id}>
+                                    <td><strong>{sale.receiptNumber || sale.saleNumber}</strong></td>
+                                    <td>{new Date(sale.createdAt).toLocaleString()}</td>
+                                    <td>{sale.items?.length || 0} items</td>
+                                    <td>{money(sale.totalAmount || sale.subtotal)}</td>
+                                    <td>{sale.paymentMethod}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </>
+    );
 }
 
 function MainApp() {
@@ -373,9 +468,14 @@ function MainApp() {
     
     return <div className="pos-root"><Shell view={view} setView={setView}>
         {error && <div className="alert" style={{color: 'red', backgroundColor: '#ffe5e5', padding: '10px', borderRadius: '4px', marginBottom: '20px', border: '1px solid red'}}>Warning: Catalog is outdated. {error}</div>}
+        
         {view === 'dashboard' && <Dashboard products={products} />}
         {view === 'inventory' && <Inventory products={products} reload={reload} notify={notify} />}
         {view === 'checkout' && <Checkout products={products} reload={reload} notify={notify} />}
+        
+        {/* Render the safe Sales History component */}
+        {view === 'history' && <SalesHistory notify={notify} />}
+        
     </Shell>{toast && <div className="toast">{toast}</div>}</div>;
 }
 
