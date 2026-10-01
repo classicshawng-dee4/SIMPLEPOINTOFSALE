@@ -86,9 +86,16 @@ Create a `.env` file in the project root and add:
 ```env
 PORT=5001
 MONGO_URI=mongodb://127.0.0.1:27017/pos69_db
+JWT_SECRET=replace-with-a-long-random-secret
 ```
 
-> Do not upload the `.env` file or your database credentials to GitHub.
+Generate a strong JWT secret with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Use the generated value for `JWT_SECRET`. Do not upload the `.env` file or your database credentials to GitHub.
 
 ### Run the Server
 
@@ -103,6 +110,24 @@ http://localhost:5001
 ```
 
 ## API Routes
+
+### Authentication
+
+Base URL: `/api/auth`
+
+- `POST /api/auth/register` - create an account
+- `POST /api/auth/login` - sign in and receive a bearer token
+
+In Postman, select **Body > raw > JSON**. Login accepts an email or username:
+
+```json
+{
+  "identifier": "cashier@example.com",
+  "password": "your-password"
+}
+```
+
+Registration requires `name`, `email`, and a password of at least six characters. An optional `username` can also be set. Public registration always creates a `Cashier`; it does not allow a request to grant itself the `Admin` role.
 
 ### Products
 
