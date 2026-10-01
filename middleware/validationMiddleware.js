@@ -1,4 +1,4 @@
-import { check, validationResult } from "express-validator";
+import { body, check, validationResult } from "express-validator";
 
 // Helper function to catch any validation errors and format them cleanly
 const handleValidationErrors = (req, res, next) => {
@@ -16,15 +16,28 @@ const handleValidationErrors = (req, res, next) => {
 
 // 1. Rules for user registration
 export const validateRegister = [
-    check("name", "Name is required").not().isEmpty(),
-    check("email", "Please provide a valid email address").isEmail(),
+    check("name", "Name is required").trim().notEmpty(),
+    check("email", "Please provide a valid email address").trim().isEmail().normalizeEmail(),
+    check("username", "Username must be at least 3 characters long")
+        .optional({ checkFalsy: true })
+        .trim()
+        .isLength({ min: 3 }),
     check("password", "Password must be at least 6 characters long").isLength({ min: 6 }),
     handleValidationErrors
 ];
 
 // 2. Rules for user login
 export const validateLogin = [
-    check("email", "Please provide a valid email address").isEmail(),
-    check("password", "Password is required").not().isEmpty(),
+    (req, res, next) => {
+        const identifier = req.body?.identifier ?? req.body?.username ?? req.body?.email;
+        if (typeof identifier !== "string" || !identifier.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "Username or email is required",
+            });
+        }
+        next();
+    },
+    body("password", "Password is required").notEmpty(),
     handleValidationErrors
 ];
