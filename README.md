@@ -97,7 +97,7 @@ Create a `.env` file in the project root with the following values:
 ```env
 PORT=5001
 MONGO_URI=mongodb://127.0.0.1:27017/pos69_db
-JWT_SECRET=your-very-long-random-secret
+JWT_SECRET=replace-with-a-long-random-secret
 ```
 
 You can generate a secure JWT secret with:
