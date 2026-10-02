@@ -2,8 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 require('dotenv').config({ path: __dirname + '/.env' });
-const productRoutes = require('./routes/productRoutes');
-const salesRoutes = require('./routes/salesRoutes');
+const productRoutes = require('./simple-pos-feature-frontend/routes/productRoutes');
+const salesRoutes = require('./simple-pos-feature-frontend/routes/salesRoutes');
 
 const app = express();
 
