@@ -96,7 +96,7 @@ Create a `.env` file in the project root with the following values:
 
 ```env
 PORT=5001
-MONGO_URI=mongodb://127.0.0.1:27017/pos69_db
+MONGO_URI=mongodb+srv://gee_dev:gee7890@cluster0.m5kll7k.mongodb.net/simple-pos-dev?appName=Cluster0
 JWT_SECRET=replace-with-a-long-random-secret
 ```
 
